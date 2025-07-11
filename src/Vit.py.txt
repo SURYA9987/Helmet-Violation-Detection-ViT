@@ -1,0 +1,365 @@
+import os
+import torch
+from PIL import Image
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms, models
+import torch.nn as nn
+import torch.optim as optim
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix, classification_report, precision_score, recall_score, f1_score
+from collections import Counter
+
+# ============================ Dataset ============================
+class CustomDataset(Dataset):
+    def __init__(self, image_dir, label_dir, transform=None):
+        self.image_dir = image_dir
+        self.label_dir = label_dir
+        self.transform = transform
+        self.image_files = os.listdir(image_dir)
+
+    def __getitem__(self, idx):
+        img_name = self.image_files[idx]
+        img_path = os.path.join(self.image_dir, img_name)
+        label_name = img_name.rsplit('.', 1)[0] + '.txt'
+        label_path = os.path.join(self.label_dir, label_name)
+
+        image = Image.open(img_path).convert("RGB")
+        if self.transform:
+            image = self.transform(image)
+
+        label = 0
+        if os.path.exists(label_path):
+            with open(label_path, 'r') as f:
+                lines = [line.strip() for line in f.readlines() if line.strip()]
+                if lines:
+                    try:
+                        classes = [int(line.split()[0]) for line in lines if len(line.split()) > 0]
+                        if classes:
+                            label = max(set(classes), key=classes.count)
+                    except:
+                        pass
+
+        return image, label
+
+    def __len__(self):
+        return len(self.image_files)
+
+# ============================ Config ============================
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+class_labels = ['Helmet', 'Non-Helmet', 'Bike', 'License Plate']
+
+train_dir = '/kaggle/input/vision-transfomer-model/dataset-1/dataset-1/Train/images'
+label_dir = '/kaggle/input/vision-transfomer-model/dataset-1/dataset-1/Train/labels'
+test_dir = '/kaggle/input/vision-transfomer-model/dataset-1/dataset-1/Val/images'
+test_label_dir = '/kaggle/input/vision-transfomer-model/dataset-1/dataset-1/Val/labels'
+
+train_dataset = CustomDataset(train_dir, label_dir, transform=transform)
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+
+test_dataset = CustomDataset(test_dir, test_label_dir, transform=transform)
+test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+
+# ============================ Model ============================
+model = models.resnet18(pretrained=True)
+model.fc = nn.Linear(model.fc.in_features, len(class_labels))
+model = model.to(device)
+
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+
+# ============================ Train Function ============================
+def train_model(model, train_loader, criterion, optimizer, scheduler, epochs):
+    model.train()
+    accuracy_list = []
+    loss_list = []
+
+    for epoch in range(epochs):
+        running_loss = 0.0
+        correct = 0
+        total = 0
+
+        for images, labels in train_loader:
+            images = images.to(device)
+            labels = labels.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+            running_loss += loss.item()
+            _, predicted = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+        epoch_loss = running_loss / len(train_loader)
+        epoch_acc = 100 * correct / total
+        loss_list.append(epoch_loss)
+        accuracy_list.append(epoch_acc)
+
+        print(f"Epoch [{epoch+1}/{epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_acc:.2f}%")
+        scheduler.step()
+
+    return accuracy_list, loss_list
+
+# ============================ Plot Training Metrics ============================
+def plot_training_metrics_with_points(accuracy_list, loss_list):
+    epochs = range(1, len(accuracy_list) + 1)
+
+    plt.figure(figsize=(12, 5))
+
+    # Loss
+    plt.subplot(1, 2, 1)
+    plt.plot(epochs, loss_list, marker='o', color='red')
+    for x, y in zip(epochs, loss_list):
+        plt.text(x, y, f"{y:.2f}", fontsize=8)
+    plt.title('📉 Training Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+
+    # Accuracy
+    plt.subplot(1, 2, 2)
+    plt.plot(epochs, accuracy_list, marker='o', color='green')
+    for x, y in zip(epochs, accuracy_list):
+        plt.text(x, y, f"{y:.2f}%", fontsize=8)
+    plt.title('📈 Training Accuracy')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy (%)')
+
+    plt.tight_layout()
+    plt.show()
+
+# ============================ Evaluation ============================
+def evaluate_model(model, test_loader, class_labels):
+    model.eval()
+    all_preds = []
+    all_labels = []
+
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images = images.to(device)
+            labels = labels.to(device)
+
+            outputs = model(images)
+            _, predicted = torch.max(outputs, 1)
+
+            all_preds.extend(predicted.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+
+    # Debugging
+    print("✅ True label distribution:", Counter(all_labels))
+    print("✅ Pred label distribution:", Counter(all_preds))
+
+    accuracy = 100 * (torch.tensor(all_preds) == torch.tensor(all_labels)).sum().item() / len(all_labels)
+    print(f"\n✅ Test Accuracy: {accuracy:.2f}%")
+
+    cm = confusion_matrix(all_labels, all_preds, labels=list(range(len(class_labels))))
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_labels, yticklabels=class_labels)
+    plt.xlabel("Predicted")
+    plt.ylabel("True")
+    plt.title("Confusion Matrix")
+    plt.savefig("confusion_matrix.png")
+    plt.show()
+    print("🖼️ Saved confusion_matrix.png")
+
+    # Fix applied here:
+    report = classification_report(
+        all_labels,
+        all_preds,
+        labels=list(range(len(class_labels))),
+        target_names=class_labels,
+        zero_division=0
+    )
+    print("📋 Classification Report:\n", report)
+
+    precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
+    recall = recall_score(all_labels, all_preds, average='macro', zero_division=0)
+    f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+
+    print(f"🎯 Precision: {precision:.4f}")
+    print(f"🔁 Recall:    {recall:.4f}")
+    print(f"💯 F1 Score:  {f1:.4f}")
+
+    return accuracy, precision, recall, f1, report
+
+# ============================ Plot Eval Metrics ============================
+def plot_eval_metrics(precision, recall, f1):
+    metrics = ['Precision', 'Recall', 'F1 Score']
+    values = [precision, recall, f1]
+
+    plt.figure(figsize=(6, 5))
+    sns.barplot(x=metrics, y=values, palette='viridis')
+    for i, v in enumerate(values):
+        plt.text(i, v + 0.01, f"{v:.2f}", ha='center', fontsize=10)
+    plt.title('📊 Evaluation Metrics')
+    plt.ylim(0, 1.1)
+    plt.ylabel('Score')
+    plt.show()
+
+# ============================ Save Results ============================
+def save_results_to_txt(accuracy, precision, recall, f1, report):
+    with open("training_result_summary.txt", "w") as f:
+        f.write(f"✅ Final Test Accuracy: {accuracy:.2f}%\n")
+        f.write("📋 Classification Report:\n")
+        f.write(report)
+        f.write("\n")
+        f.write(f"🎯 Precision: {precision:.4f}\n")
+        f.write(f"🔁 Recall:    {recall:.4f}\n")
+        f.write(f"💯 F1 Score:  {f1:.4f}\n")
+    print("💾 Results saved to training_result_summary.txt")
+
+# ============================ Run ============================
+accuracy_list, loss_list = train_model(model, train_loader, criterion, optimizer, scheduler, epochs=100)
+plot_training_metrics_with_points(accuracy_list, loss_list)
+
+accuracy, precision, recall, f1, report = evaluate_model(model, test_loader, class_labels)
+plot_eval_metrics(precision, recall, f1)
+save_results_to_txt(accuracy, precision, recall, f1, report)
+
+# Save the model
+model_path = "/kaggle/working/resnet18_helmet_detection.pth"
+torch.save(model.state_dict(), model_path)
+print(f"✅ Model saved to: {model_path}")
+
+!pip install easyocr
+!pip install twilio
+!pip install opencv-python-headless
+
+import cv2
+import torch
+import torchvision.transforms as transforms
+from torchvision import models
+import easyocr
+from twilio.rest import Client
+import re
+import os
+from PIL import Image  # <-- Add this line
+
+# ------------------------
+# Configuration
+# ------------------------
+
+model_path = "/kaggle/input/new-model-outcome/resnet18_helmet_detection.pth"  # Update to your model path
+class_labels = ['Helmet', 'Non-Helmet', 'Bike', 'Licence plate']
+
+# Twilio setup
+account_sid = 'AC26ebbe3932c57c0f2f6c60038d1568ee'
+auth_token = '8c7dcf96ca934bff6ef3b466513b40fa'
+twilio_number = '+19786934978'
+client = Client(account_sid, auth_token)
+
+# Sample plate-to-phone mapping
+plate_to_phone = {
+    "TN68AJ0661": "+919659339243",
+    "49CA9121": "+917339511092",
+    "TN47BC1018": "+917339511092"
+}
+
+# Normalize plate dictionary
+normalized_plate_to_phone = {
+    re.sub(r'[^A-Z0-9]', '', key.upper()): val
+    for key, val in plate_to_phone.items()
+}
+
+# ------------------------
+# Load Model
+# ------------------------
+
+model = models.resnet18(pretrained=False)
+model.fc = torch.nn.Linear(model.fc.in_features, 4)
+model.load_state_dict(torch.load(model_path, map_location=torch.device("cpu")))
+model.eval()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
+# ------------------------
+# Preprocessing
+# ------------------------
+
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.5]*3, [0.5]*3)
+])
+
+ocr_reader = easyocr.Reader(['en'])
+plates_sent = set()
+
+# ------------------------
+# Video Processing and Frame Saving
+# ------------------------
+
+video_path = "/kaggle/input/vision-transfomer-model/WhatsApp Video 2025-04-15 at 18.40.20_507f8fb2.mp4"  # Path to the input video
+cap = cv2.VideoCapture(video_path)
+
+if not cap.isOpened():
+    print("❌ Could not open video!")
+else:
+    frame_count = 0
+    non_helmet_count = 0
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        frame_count += 1
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(rgb_frame)
+        input_tensor = transform(pil_img).unsqueeze(0).to(device)
+
+        with torch.no_grad():
+            outputs = model(input_tensor)
+            _, pred_class = torch.max(outputs, 1)
+            predicted_label = class_labels[pred_class.item()]
+
+        plate_number = None
+        normalized_plate = None
+        ocr_results = ocr_reader.readtext(frame)
+
+        for (bbox, text, prob) in ocr_results:
+            if prob > 0.5 and 5 <= len(text) <= 12:
+                plate_number = text.upper().replace(" ", "")
+                normalized_plate = re.sub(r'[^A-Z0-9]', '', plate_number)
+                break
+
+        if predicted_label == "Non-Helmet":
+            non_helmet_count += 1
+
+            fine = 1000  # Default fine
+            if normalized_plate and normalized_plate in normalized_plate_to_phone:
+                phone = normalized_plate_to_phone[normalized_plate]
+                message = f"🚨 Helmet violation detected for vehicle {normalized_plate}. A fine of ₹{fine} will be issued."
+
+                try:
+                    # Send SMS using Twilio
+                    message_obj = client.messages.create(
+                        body=message,
+                        from_=twilio_number,
+                        to=phone
+                    )
+                    plates_sent.add(normalized_plate)
+                    print(f"✅ SMS sent to {phone}: {normalized_plate}")
+
+                    # Save violation frame
+                    violation_frame_filename = f"/kaggle/working/violation_frames/violation_frame_{frame_count}.jpg"
+                    os.makedirs(os.path.dirname(violation_frame_filename), exist_ok=True)
+                    cv2.imwrite(violation_frame_filename, frame)
+
+                    # Stop detection after message is sent
+                    break
+
+                except Exception as e:
+                    print(f"❌ Error sending SMS to {phone}: {e}")
+
+    cap.release()
+

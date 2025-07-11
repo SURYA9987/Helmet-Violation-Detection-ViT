@@ -1,0 +1,224 @@
+# app.py
+
+import streamlit as st
+import cv2
+import torch
+import torchvision.transforms as transforms
+from torchvision import models
+from PIL import Image
+import easyocr
+from twilio.rest import Client
+import re
+import numpy as np
+import time
+import os
+from datetime import datetime
+
+# ------------------------
+# Helper Functions
+# ------------------------
+
+def get_dynamic_fine(plate):
+    return 1000  # You can customize this based on rules
+
+def log_violation(frame_count, timestamp, plate_number, violation_type):
+    violation_log = f"Frame: {frame_count}, Timestamp: {timestamp}, Plate: {plate_number}, Violation Type: {violation_type}\n"
+    with open("violation_log.txt", "a") as log_file:
+        log_file.write(violation_log)
+
+# ------------------------
+# Streamlit Page Config
+# ------------------------
+
+st.set_page_config(page_title="🚨 Helmet Violation Detection", layout="wide")
+st.title("🚨 Helmet Violation Detection App - Pro Version with Live Camera")
+
+# ------------------------
+# Configuration
+# ------------------------
+
+model_path = "D:/new pro (av,gr)/vision transformer/results 24-04-2025/resnet18_helmet_detection.pth"
+
+class_labels = ['Helmet', 'Non-Helmet', 'Bike', 'Licence plate']
+
+# Twilio Setup
+account_sid = 'AC26ebbe3932c57c0f2f6c60038d1568ee'
+auth_token = '8c7dcf96ca934bff6ef3b466513b40fa'
+twilio_number = '+19786934978'
+client = Client(account_sid, auth_token)
+
+# Plate to phone mapping
+plate_to_phone = {
+    "TN68AJ0661": "+919659339243",
+    "49CA9121": "+917339511092",
+    "TN47BC1018": "+917339511092"
+}
+normalized_plate_to_phone = {
+    re.sub(r'[^A-Z0-9]', '', key.upper()): val
+    for key, val in plate_to_phone.items()
+}
+
+# ------------------------
+# Load Model
+# ------------------------
+
+model = models.resnet18(pretrained=False)
+model.fc = torch.nn.Linear(model.fc.in_features, 4)
+model.load_state_dict(torch.load(model_path, map_location=torch.device("cpu")))
+model.eval()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
+# ------------------------
+# Preprocessing
+# ------------------------
+
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.5]*3, [0.5]*3)
+])
+
+ocr_reader = easyocr.Reader(['en'])
+plates_sent = set()
+
+# ------------------------
+# Streamlit Upload UI
+# ------------------------
+
+uploaded_video = st.file_uploader("📤 Upload a video", type=["mp4", "avi", "mov"])
+use_camera = st.checkbox("📸 Use Webcam for Real-Time Detection")
+start_detection = st.button("▶️ Start Detection")
+stop_detection = st.button("🛑 Stop Detection")
+
+cap = None
+
+# ------------------------
+# Main Detection Logic
+# ------------------------
+
+frame_placeholder = st.empty()  # For live camera frame updating
+
+if uploaded_video and start_detection:
+    tfile = "temp_video.mp4"
+    with open(tfile, "wb") as f:
+        f.write(uploaded_video.read())
+    cap = cv2.VideoCapture(tfile)
+
+elif use_camera and start_detection:
+    cap = cv2.VideoCapture(0)  # 0 means default camera (webcam)
+
+# Process video
+if cap is not None and cap.isOpened():
+    st.success("✅ Camera/Video Loaded Successfully! Processing...")
+
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if not use_camera else 0
+
+    output_filename = "output_detected_video.mp4"
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_filename, fourcc, fps, (frame_width, frame_height))
+
+    frame_count = 0
+    non_helmet_count = 0
+
+    progress_bar = st.progress(0)
+
+    start_time = time.time()
+
+    while cap.isOpened():
+        if stop_detection:
+            st.warning("🛑 Detection stopped by user.")
+            break
+
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        frame_count += 1
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(rgb_frame)
+        input_tensor = transform(pil_img).unsqueeze(0).to(device)
+
+        with torch.no_grad():
+            outputs = model(input_tensor)
+            _, pred_class = torch.max(outputs, 1)
+            predicted_label = class_labels[pred_class.item()]
+
+        plate_number = None
+        normalized_plate = None
+        ocr_results = ocr_reader.readtext(frame)
+
+        for (bbox, text, prob) in ocr_results:
+            if prob > 0.5 and 5 <= len(text) <= 12:
+                plate_number = text.upper().replace(" ", "")
+                normalized_plate = re.sub(r'[^A-Z0-9]', '', plate_number)
+                break
+
+        timestamp = datetime.now().strftime('%H:%M:%S')
+
+        # Draw predictions
+        cv2.putText(frame, f"Prediction: {predicted_label}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+        if plate_number:
+            cv2.putText(frame, f"Plate: {plate_number}", (10, 70),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+
+        # Live Stream on Streamlit
+        frame_placeholder.image(frame, channels="BGR", use_container_width=True)
+
+        out.write(frame)
+
+        progress = int((frame_count / total_frames) * 100) if total_frames > 0 else 0
+        progress_bar.progress(min(progress, 100))
+
+        # Violation Handling
+        if predicted_label == "Non-Helmet":
+            non_helmet_count += 1
+            fine = get_dynamic_fine(normalized_plate) if normalized_plate else 1000
+            message = f"🚨 Helmet violation detected for vehicle {normalized_plate}. Fine: ₹{fine}"
+
+            if normalized_plate and normalized_plate in normalized_plate_to_phone:
+                if normalized_plate not in plates_sent:
+                    phone = normalized_plate_to_phone[normalized_plate]
+                    try:
+                        message_obj = client.messages.create(
+                            body=message,
+                            from_=twilio_number,
+                            to=phone
+                        )
+                        plates_sent.add(normalized_plate)
+                        st.success(f"✅ SMS sent to {phone}: {normalized_plate}")
+
+                        log_violation(frame_count, timestamp, normalized_plate, "Non-Helmet")
+
+                        violation_frame_filename = f"violation_frames/violation_frame_{frame_count}_{timestamp}.jpg"
+                        os.makedirs(os.path.dirname(violation_frame_filename), exist_ok=True)
+                        cv2.imwrite(violation_frame_filename, frame)
+
+                    except Exception as e:
+                        st.error(f"❌ Error sending SMS to {phone}: {e}")
+            elif normalized_plate:
+                st.warning(f"❗ Plate '{normalized_plate}' not found in database.")
+
+    cap.release()
+    out.release()
+
+    end_time = time.time()
+    total_time = end_time - start_time
+    avg_fps = frame_count / total_time if total_time > 0 else 0
+
+    st.success("✅ Detection Completed!")
+    st.info(f"📊 Total Frames Processed: {frame_count}")
+    st.info(f"⏳ Time Taken: {total_time:.2f} seconds")
+    st.info(f"📈 Average FPS: {avg_fps:.2f}")
+
+    st.download_button("📥 Download Processed Video", output_filename)
+
+elif stop_detection:
+    st.warning("🛑 Detection Process Stopped.")
+else:
+    st.warning("📸 Please upload a video or enable the webcam for real-time detection.")

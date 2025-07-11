@@ -1,0 +1,266 @@
+%cd /kaggle/input/yolo-m
+!pip install ultralytics numpy scikit-learn tqdm matplotlib
+!pip install ultralytics matplotlib seaborn
+!pip install -q ultralytics
+!pip install torch==2.2.2 torchvision==0.17.2
+
+!mkdir -p /kaggle/working/data/helmet_dataset/images/train
+!mkdir -p /kaggle/working/data/helmet_dataset/images/val
+!mkdir -p /kaggle/working/data/helmet_dataset/labels/train
+!mkdir -p /kaggle/working/data/helmet_dataset/labels/val
+
+
+!cp -r /kaggle/input/yolodata/Yolo Data Set/dataset/images/train/* /kaggle/working/data/helmet_dataset/images/train/
+!cp -r /kaggle/input/yolodata/Yolo Data Set/dataset/images/val/* /kaggle/working/data/helmet_dataset/images/val/
+!cp -r /kaggle/input/yolodata/Yolo Data Set/dataset/labels/train/* /kaggle/working/data/helmet_dataset/labels/train/
+!cp -r /kaggle/input/yolodata/Yolo Data Set/dataset/labels/val/* /kaggle/working/data/helmet_dataset/labels/val/
+dataset_yaml_m = """
+# Dataset config for YOLOv10m model
+
+train: /kaggle/input/yolodata/Yolo Data Set/dataset/images/train
+val: /kaggle/input/yolodata/Yolo Data Set/dataset/images/val
+
+nc: 4
+names: ['Helmet','Non-Helmet','Bike','Licence plate']
+"""
+import os
+# Create the directory if not already present
+os.makedirs("/kaggle/working/data", exist_ok=True)
+
+# Write the dataset YAML for yolov10m
+with open("/kaggle/working/data/helmet_yolov10m.yaml", "w") as f:
+    f.write(dataset_yaml_m.strip())
+
+print("✅ helmet_yolov10m.yaml created at /kaggle/working/data/helmet_yolov10m.yaml")
+
+
+yolov10m_yaml = """
+# YOLOv10m model for 4 classes
+
+nc: 4  # number of classes
+depth_multiple: 0.67
+width_multiple: 0.75
+
+backbone:
+  [
+    [-1, 1, Conv, [96, 3, 2]],       # 0
+    [-1, 1, Conv, [192, 3, 2]],      # 1
+    [-1, 6, C2f, [192]],             # 2
+    [-1, 1, Conv, [384, 3, 2]],      # 3
+    [-1, 12, C2f, [384]],            # 4
+    [-1, 1, Conv, [576, 3, 2]],      # 5
+    [-1, 12, C2f, [576]],            # 6
+    [-1, 1, Conv, [864, 3, 2]],      # 7
+    [-1, 6, C2f, [864]],             # 8
+    [-1, 1, SPPF, [1152]],           # 9
+  ]
+
+head:
+  [
+    [-1, 1, Conv, [576, 1, 1]],            # 10
+    [-1, 1, nn.Upsample, [None, 2, 'nearest']],  # 11
+    [[-1, 6], 1, Concat, [1]],             # 12
+    [-1, 6, C2f, [576]],                   # 13
+
+    [-1, 1, Conv, [288, 1, 1]],            # 14
+    [-1, 1, nn.Upsample, [None, 2, 'nearest']],  # 15
+    [[-1, 4], 1, Concat, [1]],             # 16
+    [-1, 6, C2f, [288]],                   # 17
+
+    [-1, 1, Conv, [288, 3, 2]],            # 18
+    [[-1, 14], 1, Concat, [1]],            # 19
+    [-1, 6, C2f, [576]],                   # 20
+
+    [-1, 1, Conv, [576, 3, 2]],            # 21
+    [[-1, 10], 1, Concat, [1]],            # 22
+    [-1, 6, C2f, [864]],                   # 23
+
+    [[17, 20, 23], 1, Detect, [nc]],       # 24
+  ]
+"""
+
+with open("/kaggle/working/yolov10m.yaml", "w") as f:
+    f.write(yolov10m_yaml.strip())
+
+print("✅ yolov10m.yaml written successfully")
+!pip install -U ultralytics
+!pip install ultralytics
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+import torch
+from ultralytics import YOLO
+
+model = YOLO('/kaggle/input/result/runs/yolov10m_custom/weights/best.pt')
+
+model.train(
+    data='/kaggle/input/result/data/helmet_yolov10m.yaml',  # make sure this is the right path
+   epochs=150,
+    imgsz=640,
+    batch=16,
+    project='/kaggle/working/runs',  # ✅ Write results here instead of the default 'runs/'
+    name='yolov10m_custom',          # Subfolder name
+    exist_ok=True  
+)
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import cv2
+import os
+
+csv_path = '/kaggle/input/results2/runs/yolov10m_custom/results.csv'
+df = pd.read_csv(csv_path)
+df.columns = df.columns.str.strip() 
+
+epochs       = df["epoch"]
+box_loss     = df["train/box_loss"]
+cls_loss     = df["train/cls_loss"]
+dfl_loss     = df["train/dfl_loss"]
+val_box_loss = df["val/box_loss"]
+precision    = df["metrics/precision(B)"]
+recall       = df["metrics/recall(B)"]
+map50        = df["metrics/mAP50(B)"]
+
+final_metrics = df.iloc[-1]
+time_taken    = final_metrics['time']
+
+total_accuracy = (final_metrics['metrics/precision(B)'] + final_metrics['metrics/recall(B)'] + final_metrics['metrics/mAP50(B)']) / 3
+
+print(f"⏱ Time: {time_taken:.2f} sec")
+print(f"📦 Box Loss: {final_metrics['train/box_loss']:.5f}")
+print(f"📚 Class Loss: {final_metrics['train/cls_loss']:.5f}")
+print(f"📉 DFL Loss: {final_metrics['train/dfl_loss']:.5f}")
+print(f"✅ Precision: {final_metrics['metrics/precision(B)']:.4f}")
+print(f"✅ Recall: {final_metrics['metrics/recall(B)']:.4f}")
+print(f"✅ mAP@0.5: {final_metrics['metrics/mAP50(B)']:.4f}")
+print(f"🔥 Total Accuracy: {total_accuracy:.4f}")
+
+plt.figure(figsize=(12, 6))
+plt.plot(epochs, box_loss, label='Train Box Loss', marker='o')
+plt.plot(epochs, cls_loss, label='Class Loss', marker='s')
+plt.plot(epochs, dfl_loss, label='DFL Loss', marker='^')
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.title("Training Loss Over Epochs")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(10, 5))
+plt.plot(epochs, val_box_loss, label='Validation Box Loss', marker='x', linestyle='--', color='orange')
+plt.xlabel("Epoch")
+plt.ylabel("Validation Loss")
+plt.title("Validation Box Loss Over Epochs")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(10, 5))
+plt.plot(epochs, map50, label='mAP@0.5', color='green', marker='d')
+for i, val in enumerate(map50):
+    plt.annotate(f"{val:.2f}", (epochs[i], map50[i]), textcoords="offset points", xytext=(0, 5), ha='center')
+plt.xlabel("Epoch")
+plt.ylabel("Accuracy (mAP@0.5)")
+plt.title("Accuracy (mAP@0.5) Over Epochs")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+!pip install twilio
+!pip install -q ultralytics
+!pip install -q easyocr
+!pip install -q twilio
+
+from ultralytics import YOLO
+import cv2
+import easyocr
+from twilio.rest import Client
+import os
+from IPython.display import Video, display
+
+# Load YOLOv8 model (helmet detection)
+helmet_model = YOLO('/kaggle/input/results2/runs/yolov10m_custom/weights/best.pt')
+
+# EasyOCR setup
+ocr_reader = easyocr.Reader(['en'])
+
+account_sid = 'ACafba6692385c71d09e29e37a4160fefe'
+auth_token = '68871f72e2fb2eb04b8f0b58b7382eea'
+twilio_number = '+17086344972'
+client = Client(account_sid, auth_token)
+
+# Example license plate to phone number mapping
+plate_to_phone = {
+    "TN68AJ0661": "+919659339243",
+    "49CA~9121": "+919659339243",
+    "TN47BC1018": "+917092816796"
+}
+
+
+# Initialize a set to keep track of plates for which messages have already been sent
+plates_sent = set()
+
+# Load video
+cap = cv2.VideoCapture('/kaggle/input/vid-new/WhatsApp Video 2025-04-21 at 7.50.46 AM.mp4')
+
+# Prepare output writer
+first_frame = True
+out = None
+
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    if first_frame:
+        height, width = frame.shape[:2]
+        out = cv2.VideoWriter('/kaggle/working/final_output.mp4',
+                              cv2.VideoWriter_fourcc(*'mp4v'),
+                              30, (width, height))
+        first_frame = False
+
+    # Helmet detection using YOLO
+    results = helmet_model(frame)
+    boxes = results[0].boxes
+    helmet_labels = results[0].names
+    no_helmet_detected = False
+
+    for box in boxes:
+        cls = int(box.cls[0])
+        label = helmet_labels[cls]
+        if label == "no_helmet":  # Adjust this to your 'no-helmet' class name
+            no_helmet_detected = True
+
+    # License plate reading using EasyOCR
+    plate_number = None
+    ocr_results = ocr_reader.readtext(frame)
+    for (bbox, text, prob) in ocr_results:
+        if prob > 0.5 and 5 <= len(text) <= 12:  # Filter based on plate size and confidence
+            plate_number = text.upper().replace(" ", "")
+            break
+
+    # If helmet violation (no helmet) and valid license plate detected
+    if no_helmet_detected and plate_number and plate_number in plate_to_phone:
+        if plate_number not in plates_sent:
+            phone = plate_to_phone[plate_number]
+            message = f"Helmet violation detected for vehicle {plate_number}. A fine will be issued."
+            client.messages.create(
+                body=message,
+                from_=twilio_number,
+                to=phone
+            )
+            plates_sent.add(plate_number)  # Add the plate to the set to prevent future messages
+            print(f"Sent message to {phone}")
+
+    # Annotate frame with detection results
+    annotated_frame = results[0].plot()
+    out.write(annotated_frame)
+
+cap.release()
+out.release()
+
+# Show the final output video
+display(Video("/kaggle/working/final_output.mp4", embed=True, width=640, height=480))
