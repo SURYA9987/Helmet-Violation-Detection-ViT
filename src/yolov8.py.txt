@@ -152,8 +152,8 @@ helmet_model = YOLO('/kaggle/input/datamodel/runs/detect/train/weights/best.pt')
 ocr_reader = easyocr.Reader(['en'])
 
 # Twilio setup
-account_sid = 'AC26ebbe3932c57c0f2f6c60038d1568ee'
-auth_token = '8c7dcf96ca934bff6ef3b466513b40fa'
+account_sid = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+auth_token = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
 twilio_number = '+19786934978'
 client = Client(account_sid, auth_token)
 
