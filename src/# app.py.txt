@@ -42,14 +42,14 @@ model_path = "D:/new pro (av,gr)/vision transformer/results 24-04-2025/resnet18_
 class_labels = ['Helmet', 'Non-Helmet', 'Bike', 'Licence plate']
 
 # Twilio Setup
-account_sid = 'AC26ebbe3932c57c0f2f6c60038d1568ee'
-auth_token = '8c7dcf96ca934bff6ef3b466513b40fa'
-twilio_number = '+19786934978'
+account_sid = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+auth_token = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+twilio_number = '+19xxxxxxxxx'
 client = Client(account_sid, auth_token)
 
 # Plate to phone mapping
 plate_to_phone = {
-    "TN68AJ0661": "+919659339243",
+    "TN68AJ0661": "+91xxxxxxxxx",
     "49CA9121": "+917339511092",
     "TN47BC1018": "+917339511092"
 }
