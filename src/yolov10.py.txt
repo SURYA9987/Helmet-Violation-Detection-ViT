@@ -187,8 +187,8 @@ helmet_model = YOLO('/kaggle/input/results2/runs/yolov10m_custom/weights/best.pt
 # EasyOCR setup
 ocr_reader = easyocr.Reader(['en'])
 
-account_sid = 'ACafba6692385c71d09e29e37a4160fefe'
-auth_token = '68871f72e2fb2eb04b8f0b58b7382eea'
+account_sid = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+auth_token = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxx'
 twilio_number = '+17086344972'
 client = Client(account_sid, auth_token)
 
